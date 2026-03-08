@@ -4,6 +4,8 @@ import DatePicker from './components/DatePicker';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { motion, AnimatePresence } from "motion/react";
+import { auth, db, signIn } from './firebase';
+import { collection, onSnapshot, addDoc, query, orderBy } from 'firebase/firestore';
 
 const ManLogo = () => (
   <svg viewBox="0 0 24 24" className="w-8 h-8" xmlns="http://www.w3.org/2000/svg">
@@ -12,38 +14,7 @@ const ManLogo = () => (
   </svg>
 );
 
-const TRAILERS = {
-  MARUCH: { weight: 26500, label: '26.5T', desc: 'MARUCH' },
-  TIRSAM: { weight: 28000, label: '28.0T', desc: 'PLATEAU' },
-  MAN_TGL: { weight: 12000, label: '12.0T', desc: 'MAN TGL' },
-};
-
-const PALETTES = {
-  EURO: { max: 33, weightMult: 1.0 },
-  ISO: { max: 26, weightMult: 1.25 },
-  DOUBLE: { max: 66, weightMult: 1.0 },
-};
-
-type PaletteKey = keyof typeof PALETTES;
-
-const PRODUCTS = {
-  CARTON_05L: { label: '0.5L', weight: 720 },
-  CARTON_1L: { label: '1L', weight: 750 },
-  CARTON_5L: { label: '5L', weight: 780 },
-  BIDON_20L: { label: '20L', weight: 100 },
-  FUT_200L: { label: 'Fûts 200L', weight: 880 },
-};
-
-type ProductKey = keyof typeof PRODUCTS;
-
-type Mission = {
-  id: string;
-  date: string;
-  trailerType: keyof typeof TRAILERS;
-  paletteType: keyof typeof PALETTES;
-  items: Record<ProductKey, number>;
-  notes: string;
-};
+import { Mission, TRAILERS, PALETTES, PRODUCTS, ProductKey, PaletteKey, TrailerKey } from './types';
 
 export default function App() {
   const [isOpen, setIsOpen] = useState(false);
@@ -66,6 +37,26 @@ export default function App() {
   const [selectedHistoryIds, setSelectedHistoryIds] = useState<Set<string>>(new Set());
   const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'week' | 'month' | 'year'>('all');
   const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [user, setUser] = useState<any>(null);
+
+  useEffect(() => {
+    signIn().then(() => {
+      setUser(auth.currentUser);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    const q = query(collection(db, `users/${user.uid}/missions`), orderBy('date', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const missions: Mission[] = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      } as Mission));
+      setHistory(missions);
+    });
+    return () => unsubscribe();
+  }, [user]);
 
   const MAN_LOGO_BASE64 = `data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgaWQ9Ik1hblRydWNrIj48cGF0aCBkPSJNMTIgNUM1LjM3MiA1IDAgMTAuMjYxIDAgMTYuNzVjMCAuNDIxLjAyMy44NC4wNjcgMS4yNWgxLjI1MmMtLjA0OS0uNDEtLjA3NS0uODI3LS4wNzUtMS4yNUMxLjI0NSAxMC45MzQgNi4wNiA2LjIxOSAxMiA2LjIxOXMxMC43NTUgNC43MTUgMTAuNzU1IDEwLjUzMmMwIC40MjMtLjAyNS44NC0uMDc1IDEuMjVoMS4yNTNjLjA0NC0uNDExLjA2Ny0uODI5LjA2Ny0xLjI1MUMyNCAxMC4yNjEgMTguNjI4IDUgMTIgNXoiIGZpbGw9IiMzNGE4NTMiPjwvcGF0aD48cGF0aCBkPSJtNS4yNiAxNS42NDUtMS4yNDYtMS4yMkgyLjI0N1YxOEg0LjEzdi0xLjQxOWwxLjEzIDEuMTA3IDEuMTMtMS4xMDdWMThoMS44ODR2LTMuNTc1SDYuNTA2ek0xMS4wMDQgMTQuNDIyIDguNjI2IDE4aDEuOTQybC4yNjUtLjRoMi4zNDJsLjI2NC40aDEuOTQzbC0yLjM3OC0zLjU3OGgtMnpmMSAxLjM5Ni41NTEuODM1aC0xLjEwMmwuNTUxLS44MzV6TTE5LjgzNiAxNi4wNTZsLTIuMjQ2LTEuNjMxaC0xLjg2OVYxOGgxLjg4NHYtMS42MTdMMTkuODM2IDE4aDEuODgzdi0zLjU3NWgtMS44ODN6IiBmaWxsPSIjMzRhODUzIj48L3BhdGg+PC9zdmc+`;
 
@@ -95,20 +86,23 @@ export default function App() {
     localStorage.setItem('logistics_draft', JSON.stringify(draft));
   }, [items, trailerType, paletteType, notes, selectedDate]);
 
-  const saveMission = () => {
-    const newMission: Mission = {
-      id: Date.now().toString(),
+  const saveMission = async () => {
+    if (!user) return;
+    const newMission: Omit<Mission, 'id'> = {
       date: selectedDate,
       trailerType,
       paletteType,
       items,
       notes,
+      uid: user.uid,
     };
-    const updatedHistory = [newMission, ...history];
-    setHistory(updatedHistory);
-    localStorage.setItem('logistics_history', JSON.stringify(updatedHistory));
-    setIsSaved(true);
-    setTimeout(() => setIsSaved(false), 3000);
+    try {
+      await addDoc(collection(db, `users/${user.uid}/missions`), newMission);
+      setIsSaved(true);
+      setTimeout(() => setIsSaved(false), 3000);
+    } catch (e) {
+      console.error("Erreur enregistrement mission", e);
+    }
   };
 
   const loadMission = (mission: Mission) => {
@@ -865,7 +859,7 @@ export default function App() {
                             }
 
                             // 6. Pied de page (Numérotation correcte X/Y)
-                            const pageCount = doc.internal.getNumberOfPages();
+                            const pageCount = (doc as any).internal.getNumberOfPages();
                             for (let i = 1; i <= pageCount; i++) {
                               doc.setPage(i);
                               doc.setFontSize(8);

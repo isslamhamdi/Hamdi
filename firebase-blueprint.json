@@ -1,0 +1,25 @@
+{
+  "entities": {
+    "Mission": {
+      "title": "Mission",
+      "description": "A logistics mission",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "trailerType": { "type": "string" },
+        "paletteType": { "type": "string" },
+        "items": { "type": "object" },
+        "notes": { "type": "string" },
+        "uid": { "type": "string" }
+      },
+      "required": ["id", "date", "trailerType", "paletteType", "items", "uid"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}/missions/{missionId}": {
+      "schema": { "$ref": "Mission" },
+      "description": "Missions for a specific user"
+    }
+  }
+}
